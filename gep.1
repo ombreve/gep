@@ -1,0 +1,47 @@
+.TH GEP 1
+.SH NAME
+gep \- Good Enough Privacy tool
+.SH SYNOPSIS
+.ad l
+.nh
+.HP 5
+.B gep
+[\fB-aAV\fR]
+[\fB-k\fIfile\fR]
+[\fB\-\-help\fR]
+.SH DESCRIPTION
+.B gep
+.SH OPTIONS
+.TP
+\fB\-a\fR[\fIseconds\fR], \fB\-\-agent\fR[=\fIseconds\fR]
+Run a key agent after successfully reading the passphrases (default).
+The agent will remain resident in memory until a period of inactivity passes.
+Default is 900 seconds (15 minutes).
+.TP
+\fB\-A\fB, \fB\-\-no\-agent\fR
+Do not start the key agent.
+.TP
+\fB\-k\fIfile\fR, \fB\-\-key\fR=\fIfile\fR
+Set the secret key file.
+.TP
+\fB\-\-help\fR
+Print a synopsis of the command line interface.
+.TP
+\fB\-V\fB, \fB\-\-version\fR
+Print version information.
+.SH ENVIRONMENT
+.TP
+.B TMPDIR
+If $XDG_RUNTIME_DIR is unset, the directory in which to create the agent socket.
+Default is /tmp.
+.TP
+.B XDG_CONFIG_HOME
+The directory under which the secret key will be created and read.
+Default is $HOME/.config.
+.TP
+.B XDG_RUNTIME_DIR
+The directory in which to create the agent socket.
+.SH FILES
+.TP
+.B $XDG_CONFIG_HOME/gep/gep.key
+The file holding the secret key.
