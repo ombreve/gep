@@ -1,3 +1,4 @@
+#include <string.h>
 #include "rfc8439.h"
 
 #define U8V(v)  ((uint8_t)(v)  & UINT8_C(0xFF))
@@ -33,7 +34,7 @@ static void
 chacha20_block(uint8_t output[64], const uint32_t input[16])
 {
     uint32_t x[16];
-    int i;
+    size_t i;
 
     for (i = 0; i < 16; i++)
         x[i] = input[i];
@@ -96,34 +97,29 @@ chacha20_init(CHACHA20_CTX *x, const uint8_t key[32], const uint8_t nonce[12])
     x->state[13] = U8TO32_LITTLE(nonce + 0);
     x->state[14] = U8TO32_LITTLE(nonce + 4);
     x->state[15] = U8TO32_LITTLE(nonce + 8);
-
-    x->idx = 0;
 }
 
 void
 chacha20_encrypt(CHACHA20_CTX *x, const uint8_t *m, uint8_t *c, size_t n)
 {
+    uint8_t output[64];
     size_t i;
 
     if (!n)
         return;
     for (;;) {
-        if (!x->idx) {
-            chacha20_block(x->output, x->state);
-            x->state[12] = PLUSONE(x->state[12]);
-        }
-        if (n <= 64 - x->idx) { /* last block */
+        chacha20_block(output, x->state);
+        x->state[12] = PLUSONE(x->state[12]);
+        if (n <= 64) { /* last block */
             for (i = 0; i < n; i++)
-                c[i] = m[i] ^ x->output[i];
-            x->idx = i == 64 ? 0 : i;
+                c[i] = m[i] ^ output[i];
             return;
         }
-        for (i = x->idx; i < 64; i++)
-            c[i] = m[i] ^ x->output[i];
-        c += 64 - x->idx;
-        m += 64 - x->idx;
-        n -= 64 - x->idx;
-        x->idx = 0;
+        for (i = 0; i < 64; i++)
+            c[i] = m[i] ^ output[i];
+        c += 64;
+        m += 64;
+        n -= 64;
     }
 }
 
@@ -415,52 +411,45 @@ int rfc8439_verify(RFC8439_CTX *x, uint8_t mac[16])
     return poly1305_verify(mac, padding);
 }
 
+void
+xchacha20_key(const uint8_t key[32], const uint8_t nonce[24],
+              uint8_t subkey[32], uint8_t subnonce[12])
+{
+    CHACHA20_CTX ctx[1];
+    uint32_t *x = ctx->state;
+    size_t i;
+
+    /* Init with key and the first 16 bytes of the nonce (no counter) */
+    chacha20_init(ctx, key, nonce + 4);
+    x[12] = U8TO32_LITTLE(nonce);
+
+    /* One block function without the final addition */
+    for (i = 0; i < 10; i++) {
+        QUARTERROUND(0,  4,  8, 12)
+        QUARTERROUND(1,  5,  9, 13)
+        QUARTERROUND(2,  6, 10, 14)
+        QUARTERROUND(3,  7, 11, 15)
+        QUARTERROUND(0,  5, 10, 15)
+        QUARTERROUND(1,  6, 11, 12)
+        QUARTERROUND(2,  7,  8, 13)
+        QUARTERROUND(3,  4,  9, 14)
+    }
+
+    /* First and last rows of state make the subkey */
+    for (i = 0; i < 4; i++)
+        U32TO8_LITTLE(subkey + 4 * i, x[i]);
+    for (i = 12; i < 16; i++)
+        U32TO8_LITTLE(subkey + 4 * i - 32, x[i]);
+
+    /* Last 8 bytes of nonce prefixed by 4 null bytes make the subnonce */
+    memset(subnonce, 0, 4);
+    memcpy(subnonce + 4, nonce + 16, 8);
+}
+
 #ifdef RFC8439_TEST
 
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-
-static const uint8_t key[32] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
-};
-static const uint8_t key1[32] = {
-    0x85, 0xd6, 0xbe, 0x78, 0x57, 0x55, 0x6d, 0x33,
-    0x7f, 0x44, 0x52, 0xfe, 0x42, 0xd5, 0x06, 0xa8,
-    0x01, 0x03, 0x80, 0x8a, 0xfb, 0x0d, 0xb2, 0xfd,
-    0x4a, 0xbf, 0xf6, 0xaf, 0x41, 0x49, 0xf5, 0x1b
-};
-static const uint8_t key2[32] = {
-    0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
-    0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
-    0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
-    0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
-};
-static const uint8_t nonce[12] = {
-    0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x4a,
-    0x00, 0x00, 0x00, 0x00
-};
-static const uint8_t nonce1[12] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a,
-    0x00, 0x00, 0x00, 0x00
-};
-static const uint8_t nonce2[12] = {
-    0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43,
-    0x44, 0x45, 0x46, 0x47
-};
-static const uint8_t aad[] = {
-    0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3,
-    0xc4, 0xc5, 0xc6, 0xc7
-};
-static const char *message =
-    "Ladies and Gentlemen of the class of '99: "
-    "If I could offer you only one tip for the future, "
-    "sunscreen would be it.";
-static const char *message1 =
-    "Cryptographic Forum Research Group";
 
 static void
 print_state(const uint32_t state[16])
@@ -497,6 +486,16 @@ print_block(const uint8_t *block, size_t len)
 static void
 test_block_function()
 {
+    static const uint8_t key[32] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+    };
+    static const uint8_t nonce[12] = {
+        0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x4a,
+        0x00, 0x00, 0x00, 0x00
+    };
     static const uint32_t expected_state[16] = {
         0x61707865, 0x3320646e, 0x79622d32, 0x6b206574,
         0x03020100, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
@@ -541,6 +540,20 @@ test_block_function()
 static void
 test_chacha20_cipher(void)
 {
+    static const uint8_t key[32] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+    };
+    static const uint8_t nonce[12] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a,
+        0x00, 0x00, 0x00, 0x00
+    };
+    static const char *message =
+        "Ladies and Gentlemen of the class of '99: "
+        "If I could offer you only one tip for the future, "
+        "sunscreen would be it.";
     static const uint8_t expected[] = {
         0x6e, 0x2e, 0x35, 0x9a, 0x25, 0x68, 0xf9, 0x80,
         0x41, 0xba, 0x07, 0x28, 0xdd, 0x0d, 0x69, 0x81,
@@ -567,7 +580,7 @@ test_chacha20_cipher(void)
         exit(1);
     }
     printf("2.4.2.  Example and Test Vector for the ChaCha20 Cipher\n\n");
-    chacha20_init(x, key, nonce1);
+    chacha20_init(x, key, nonce);
     chacha20_encrypt(x, (uint8_t *)message, output, sizeof(expected));
     printf("   Expected ciphertext Sunscreen:\n");
     print_block(expected, sizeof(expected));
@@ -581,6 +594,14 @@ test_chacha20_cipher(void)
 static void
 test_poly1305(void)
 {
+    static const uint8_t key[32] = {
+        0x85, 0xd6, 0xbe, 0x78, 0x57, 0x55, 0x6d, 0x33,
+        0x7f, 0x44, 0x52, 0xfe, 0x42, 0xd5, 0x06, 0xa8,
+        0x01, 0x03, 0x80, 0x8a, 0xfb, 0x0d, 0xb2, 0xfd,
+        0x4a, 0xbf, 0xf6, 0xaf, 0x41, 0x49, 0xf5, 0x1b
+    };
+    static const char message[] =
+        "Cryptographic Forum Research Group";
     static const uint8_t expected[16] = {
         0xa8, 0x06, 0x1d, 0xc1, 0x30, 0x51, 0x36, 0xc6,
         0xc2, 0x2b, 0x8b, 0xaf, 0x0c, 0x01, 0x27, 0xa9
@@ -590,8 +611,8 @@ test_poly1305(void)
     uint8_t output[16];
 
     printf("2.5.2.  Poly1305 Example and Test Vector\n\n");
-    poly1305_init(x, key1);
-    poly1305_update(x, (uint8_t *)message1, strlen(message1));
+    poly1305_init(x, key);
+    poly1305_update(x, (uint8_t *)message, strlen(message));
     poly1305_final(x, output);
     printf("   Expected tag:\n");
     print_block(expected, sizeof(expected));
@@ -605,6 +626,24 @@ test_poly1305(void)
 static void
 test_rfc8439(void)
 {
+    static const uint8_t key[32] = {
+        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+        0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+        0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
+    };
+    static const uint8_t nonce[12] = {
+        0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43,
+        0x44, 0x45, 0x46, 0x47
+    };
+    static const uint8_t aad[] = {
+        0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3,
+        0xc4, 0xc5, 0xc6, 0xc7
+    };
+    static const char message[] =
+        "Ladies and Gentlemen of the class of '99: "
+        "If I could offer you only one tip for the future, "
+        "sunscreen would be it.";
     static const uint8_t expected[] = {
         0xd3, 0x1a, 0x8d, 0x34, 0x64, 0x8e, 0x60, 0xdb,
         0x7b, 0x86, 0xaf, 0xbc, 0x53, 0xef, 0x7e, 0xc2,
@@ -631,7 +670,7 @@ test_rfc8439(void)
     size_t len = strlen(message);
 
     printf("2.8.2.  Example and Test Vector for AEAD_CHACHA20_POLY1305\n\n");
-    rfc8439_init(x, key2, nonce2, aad, sizeof(aad));
+    rfc8439_init(x, key, nonce, aad, sizeof(aad));
     rfc8439_encrypt(x, (uint8_t *)message, output, len);
     rfc8439_mac(x, output + len);
     printf("   Expected cipher text plus MAC:\n");
@@ -642,7 +681,7 @@ test_rfc8439(void)
         memcmp(expected, output, sizeof(expected)) ?
         "ERROR" : "OK");
 
-    rfc8439_init(x, key2, nonce2, aad, sizeof(aad));
+    rfc8439_init(x, key, nonce, aad, sizeof(aad));
     rfc8439_decrypt(x, output, plain, len);
     plain[len] = 0;
     printf("   Expected plain text:\n      %s\n", message);
@@ -650,8 +689,51 @@ test_rfc8439(void)
     printf("   %s\n",
         memcmp(message, plain, len) ?
         "ERROR" : "OK");
-    printf("   Authentification %s.\n",
-           rfc8439_verify(x, output + len) ?  "succeeded" : "failed");
+    printf("   Authentification:\n   %s\n\n",
+           rfc8439_verify(x, output + len) ?  "OK" : "ERROR");
+}
+
+static void
+test_xchacha20()
+{
+    static const uint8_t key[32] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+    };
+    static const uint8_t nonce[24] = {
+        0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x4a,
+        0x00, 0x00, 0x00, 0x00, 0x31, 0x41, 0x59, 0x27,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
+    };
+    static const uint8_t expected_key[32] = {
+        0x82, 0x41, 0x3b, 0x42, 0x27, 0xb2, 0x7b, 0xfe,
+        0xd3, 0x0e, 0x42, 0x50, 0x8a, 0x87, 0x7d, 0x73,
+        0xa0, 0xf9, 0xe4, 0xd5, 0x8a, 0x74, 0xa8, 0x53,
+        0xc1, 0x2e, 0xc4, 0x13, 0x26, 0xd3, 0xec, 0xdc
+    };
+    static const uint8_t expected_nonce[12] = {
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04,
+        0x05, 0x06, 0x07, 0x08
+    };
+
+    uint8_t subkey[32], subnonce[12];
+
+    printf("Test AEAD_XChaCha20_Poly1305\n\n");
+    xchacha20_key(key, nonce, subkey, subnonce);
+    printf("   Expected key:\n");
+    print_block(expected_key, 32);
+    printf("   Result:\n");
+    print_block(subkey, 32);
+    printf("   %s\n\n",
+        memcmp(expected_key, subkey, 32) ?  "ERROR" : "OK");
+    printf("   Expected nonce:\n");
+    print_block(expected_nonce, 12);
+    printf("   Result:\n");
+    print_block(subnonce, 12);
+    printf("   %s\n",
+        memcmp(expected_nonce, subnonce, 12) ?  "ERROR" : "OK");
 }
 
 main()
@@ -660,5 +742,7 @@ main()
     test_chacha20_cipher();
     test_poly1305();
     test_rfc8439();
+    test_xchacha20();
 }
+
 #endif /* RFC8439_TEST */

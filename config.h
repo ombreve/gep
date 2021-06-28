@@ -9,6 +9,10 @@
 #define GEP_FILE_EXTENSION .gep
 #endif
 
+#ifndef GEP_ADDITIONAL_AUTHENTIFICATED_DATA
+#define GEP_ADDITIONAL_AUTHENTIFICATED_DATA "Good Enough Privacy"
+#endif
+
 #ifndef GEP_PASSWORD_MAX
 #define GEP_PASSWORD_MAX 64
 #endif

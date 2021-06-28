@@ -22,9 +22,10 @@
 #define SHA256_IMPLEMENTATION
 #include "sha256.h"
 
-static int agent_timeout = GEP_AGENT_TIMEOUT;
+static int agent_timeout = 0;
 static char *keyfile = 0;
 static const char gep_suffix[] = STR(GEP_FILE_EXTENSION);
+static const char gep_aad[] = GEP_ADDITIONAL_AUTHENTIFICATED_DATA;
 
 static char *fatal_oname = 0;
 static FILE *fatal_ofd = 0;
@@ -551,6 +552,93 @@ write_key(char *keyfile, uint8_t *key, int iexp)
     }
 }
 
+/* Encrypt stream IN to stream OUT with AEAD_XChaCha20_Poly1305. */
+static void
+encrypt_stream(FILE *in, FILE *out,
+               const uint8_t key[32], const uint8_t *aad, size_t aad_len)
+{
+    RFC8439_CTX ctx[1];
+    uint8_t buffer[2][RFC8439_BLOCK_SIZE * 1024];
+    uint8_t mac[RFC8439_MAC_SIZE];
+    uint8_t subkey[32], nonce[24], subnonce[12];
+
+    secure_entropy(nonce, 24);
+    if (!fwrite(nonce, sizeof(nonce), 1, out))
+        fatal("error writing nonce to ciphertext file");
+
+    xchacha20_key(key, nonce, subkey, subnonce);
+    rfc8439_init(ctx, subkey, subnonce, aad, aad_len);
+
+    for (;;) {
+        size_t z = fread(buffer[0], 1, sizeof(buffer[0]), in);
+
+        if (!z) {
+            if (ferror(in))
+                fatal("error reading plaintext file");
+            break;
+        }
+        rfc8439_encrypt(ctx, buffer[0], buffer[1], z);
+        if (!fwrite(buffer[1], z, 1, out))
+            fatal("error writing ciphertext file");
+        if (z < sizeof(buffer[0]))
+            break;
+    }
+
+    rfc8439_mac(ctx, mac);
+    if (!fwrite(mac, sizeof(mac), 1, out))
+        fatal("error writing checksum to ciphertext file");
+    if (fflush(out))
+        fatal("error flushing to ciphertext file -- %s", strerror(errno));
+}
+
+/* Decrypt stream IN to stream OUT with AEAD_XChaCha20_Poly1305. */
+static void
+decrypt_stream(FILE *in, FILE *out,
+               const uint8_t key[32], const uint8_t *aad, size_t aad_len)
+{
+    RFC8439_CTX ctx[1];
+    uint8_t buffer[2][RFC8439_BLOCK_SIZE * 1024 + RFC8439_MAC_SIZE];
+    uint8_t subkey[32], nonce[24], subnonce[12];
+
+    if (!(fread(nonce, sizeof(nonce), 1, in))) {
+        if (ferror(in))
+            fatal("cannot read ciphertext nonce");
+        else
+            fatal("ciphertext file too short for a nonce");
+    }
+    xchacha20_key(key, nonce, subkey, subnonce);
+    rfc8439_init(ctx, subkey, subnonce, aad, aad_len);
+
+    if (!(fread(buffer[0], RFC8439_MAC_SIZE, 1, in))) {
+        if (ferror(in))
+            fatal("cannot read ciphertext file");
+        else
+            fatal("ciphertext file too short");
+    }
+    for (;;) {
+        uint8_t *p = buffer[0] + RFC8439_MAC_SIZE;
+        size_t z = fread(p, 1, sizeof(buffer[0]) - RFC8439_MAC_SIZE, in);
+
+        if (!z) {
+            if (ferror(in))
+                fatal("error reading ciphertext file");
+            break;
+        }
+        rfc8439_decrypt(ctx, buffer[0], buffer[1], z);
+        if (!fwrite(buffer[1], z, 1, out))
+            fatal("error writing plaintext file");
+
+        memmove(buffer[0], buffer[0] + z, RFC8439_MAC_SIZE);
+        if (z < sizeof(buffer[0]) - RFC8439_MAC_SIZE)
+            break;
+    }
+
+    if (!rfc8439_verify(ctx, buffer[0]))
+        fatal("checksum mismatch");
+    if (fflush(out))
+        fatal("error flushing to plaintext file -- %s", strerror(errno));
+}
+
 /* Print a nice fingerprint of a key. */
 static void
 print_fingerprint(const uint8_t *key)
@@ -709,9 +797,11 @@ command_encrypt(struct optparse *options)
     static const struct optparse_name encrypt[] = {
         {"stdout", 'c', OPTPARSE_NONE},
         {"keep",   'k', OPTPARSE_NONE},
+        {"aad",    256, OPTPARSE_REQUIRED},
         {0, 0, 0}
     };
     int option, tostdout = 0, keep = 0;
+    const char *aad = gep_aad;
     char *infile, *outfile;
     FILE *in = stdin, *out = stdout;
 
@@ -721,15 +811,21 @@ command_encrypt(struct optparse *options)
         switch (option) {
         case 'c':
             tostdout = 1;
+            keep = 1;
             break;
         case 'k':
             keep = 1;
+            break;
+        case 256:
+            aad = options->optarg;
             break;
         case OPTPARSE_ERROR:
         default:
             fatal("%s", options->errmsg);
         }
     }
+
+    load_key(keyfile, key);
 
     infile = optparse_arg(options);
     if (infile) {
@@ -738,8 +834,6 @@ command_encrypt(struct optparse *options)
             fatal("could not open input file '%s' -- %s",
                   infile, strerror(errno));
     }
-
-    load_key(keyfile, key);
 
     outfile = dupstr(optparse_arg(options));
     if (outfile && tostdout)
@@ -755,6 +849,7 @@ command_encrypt(struct optparse *options)
         fatal_oname = outfile;
     }
 
+    encrypt_stream(in, out, key, (uint8_t *)aad, strlen(aad));
 
     if (in != stdin)
         fclose(in);
@@ -770,9 +865,11 @@ command_decrypt(struct optparse *options)
     static const struct optparse_name decrypt[] = {
         {"stdout", 'c', OPTPARSE_NONE},
         {"keep",   'k', OPTPARSE_NONE},
+        {"aad",    256, OPTPARSE_REQUIRED},
         {0, 0, 0}
     };
     int option, tostdout = 0, keep = 0;
+    const char *aad = gep_aad;
     char *infile, *outfile;
     FILE *in = stdin, *out = stdout;
 
@@ -782,15 +879,21 @@ command_decrypt(struct optparse *options)
         switch (option) {
         case 'c':
             tostdout = 1;
+            keep = 1;
             break;
         case 'k':
             keep = 1;
+            break;
+        case 256:
+            aad = options->optarg;
             break;
         case OPTPARSE_ERROR:
         default:
             fatal("%s", options->errmsg);
         }
     }
+
+    load_key(keyfile, key);
 
     infile = optparse_arg(options);
     if (infile) {
@@ -799,8 +902,6 @@ command_decrypt(struct optparse *options)
             fatal("could not open input file '%s' -- %s",
                   infile, strerror(errno));
     }
-
-    load_key(keyfile, key);
 
     outfile = dupstr(optparse_arg(options));
     if (outfile && tostdout)
@@ -822,6 +923,7 @@ command_decrypt(struct optparse *options)
         fatal_oname = outfile;
     }
 
+    decrypt_stream(in, out, key, (uint8_t *)aad, strlen(aad));
 
     if (in != stdin)
         fclose(in);
@@ -848,7 +950,6 @@ command_fingerprint(struct optparse *options)
             fatal("%s", options->errmsg);
         }
     }
-
     load_key(keyfile, key);
     print_fingerprint(key);
 }

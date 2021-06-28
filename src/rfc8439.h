@@ -10,16 +10,15 @@
 
 typedef struct {
     uint32_t state[16];
-    uint8_t output[64];
-    size_t idx;
 } CHACHA20_CTX;
+
+#define CHACHA20_BLOCK_SIZE 64
 
 /* Initialize a chacha20 context with a KEY and a NONCE. */
 void chacha20_init(CHACHA20_CTX *ctx,
                    const uint8_t key[32], const uint8_t nonce[12]);
 
 /* Encrypt N bytes from message M to C.
- * This function can be called mutiple times to encrypt messages by chunks.
  * Decryption is done by exchanging M and C. */
 void chacha20_encrypt(CHACHA20_CTX *ctx,
                       const uint8_t *m, uint8_t *c, size_t n);
@@ -63,6 +62,7 @@ typedef struct {
     size_t c_sz;
 } RFC8439_CTX;
 
+#define RFC8439_BLOCK_SIZE 64
 #define RFC8439_MAC_SIZE 16
 
 /* Initialize a rfc8439 context with a KEY, a NONCE and N bytes of additional
@@ -71,8 +71,7 @@ void rfc8439_init(RFC8439_CTX *ctx,
                   const uint8_t key[32], const uint8_t nonce[12],
                   const uint8_t *aad, size_t n);
 
-/* Encrypt N bytes from message M to C.
- * This function can be called mutiple times to encrypt messages by chunks. */
+/* Encrypt N bytes from message M to C. */
 void rfc8439_encrypt(RFC8439_CTX *ctx,
                      const uint8_t *m, uint8_t *c, size_t n);
 
@@ -88,5 +87,13 @@ void rfc8439_decrypt(RFC8439_CTX *x,
 /* Return a non null value if the message authentification code MAC is correct.
  * MAC should point to the end of the previously decrypted message. */
 int rfc8439_verify(RFC8439_CTX *ctx, uint8_t mac[16]);
+
+/**
+ ** AEAD_XChaCha20_Poly1305: an extension of RFC8439 using a 192-bit nonce.
+ **/
+
+/* Get a SUBKEY and SUBNONCE, from KEY and  192-bit NONCE. */
+void xchacha20_key(const uint8_t key[32], const uint8_t nonce[24],
+                   uint8_t subkey[32], uint8_t subnonce[12]);
 
 #endif /* RFC8439_H */
