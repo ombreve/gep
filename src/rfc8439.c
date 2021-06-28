@@ -720,7 +720,7 @@ test_xchacha20()
 
     uint8_t subkey[32], subnonce[12];
 
-    printf("Test AEAD_XChaCha20_Poly1305\n\n");
+    printf("Test of XChaCha20\n\n");
     xchacha20_key(key, nonce, subkey, subnonce);
     printf("   Expected key:\n");
     print_block(expected_key, 32);

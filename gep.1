@@ -4,22 +4,22 @@ gep \- Good Enough Privacy tool
 .SH SYNOPSIS
 .ad l
 .nh
-.HP 5
+.HP 4
 .B gep
-[\fB-aAV\fR]
-[\fB-k\fIfile\fR]
-[\fB\-\-help\fR]
+[\fB-AV\fR] [\fB-a\fR[\fIseconds\fR]] [\fB-k\fIfile\fR] [\fB\-\-help\fR]
+<command> [<args>]
 .SH DESCRIPTION
 .B gep
+encrypts files with AEAD_XChaCha20_Poly1305, a variant of rfc8439.
 .SH OPTIONS
 .TP
 \fB\-a\fR[\fIseconds\fR], \fB\-\-agent\fR[=\fIseconds\fR]
-Run a key agent after successfully reading the passphrases (default).
+Run a key agent after successfully reading the passphrases.
 The agent will remain resident in memory until a period of inactivity passes.
 Default is 900 seconds (15 minutes).
 .TP
 \fB\-A\fB, \fB\-\-no\-agent\fR
-Do not start the key agent.
+Do not start the key agent (default).
 .TP
 \fB\-k\fIfile\fR, \fB\-\-key\fR=\fIfile\fR
 Set the secret key file.
@@ -29,6 +29,65 @@ Print a synopsis of the command line interface.
 .TP
 \fB\-V\fB, \fB\-\-version\fR
 Print version information.
+.SH COMMANDS
+Any unique prefix for a command is accepted.
+For example, the command \fBe\fR would mean \fBencrypt\fR.
+.TP
+\fBkeygen\fR [\fB\-defu\fR]
+Generate a new encryption key either from system's entropy or a passphrase.
+.RS 4
+.TP
+\fB\-d\fR, \fB\-\-derive\fR
+Derive the encryption key from a passphrase.
+.TP
+\fB\-e\fR, \fB\-\-edit\fR
+Edit the protection passphrase on an existing key.
+.TP
+\fB\-f\fR, \fB\-\-force\fR
+Overwrite any existing encryption key.
+.TP
+\fB\-u\fR, \fB\-\-plain\fR
+Do not use a protection passphrase and store the encryption key
+unencrypted on the disk.  Consider using the key agent instead of this option.
+.RE
+.TP
+\fBencrypt\fR [\fB\-ck\fR] [\fB--aad\fR\ \fIstring\fR] [\fIinfile\fR [\fIoutfile\fR]]
+Encrypt a file.
+If no output filename is given, the input file is replaced by a file with
+the suffix \fB.gep\fR added.
+If no files are given, encrypt standard input to standard output.
+.RS 4
+.TP
+\fB\-c\fR, \fB\-\-stdout\fR
+Ouput goes to standard output. The input file is untouched.
+.TP
+\fB\-k\fR, \fB\-\-keep\fR
+Do not delete the input file.
+.TP
+\fB\-\-aad\fR=\fIstring\fR
+Use a specific AAD (Additional Authentificated Data) for
+file content authentification.
+.RE
+.TP
+\fBdecrypt\fR [\fB\-ck\fR] [\fB--aad\fR\ \fIstring\fR] [\fIinfile\fR [\fIoutfile\fR]]
+Decrypt a file.
+If no output filename is given, the input file is replaced by a file with
+the suffix \fB.gep\fR removed.
+Without an output filename, it is an error for the input filename
+to lack this suffix.
+If no filenames are given, decrypt standard input to standard output.
+.RS 4
+.TP
+\fB\-c\fR, \fB\-\-stdout\fR
+Ouput goes to standard output. The input file is untouched.
+.TP
+\fB\-k\fR, \fB\-\-keep\fR
+Do not delete the input file.
+.TP
+\fB\-\-aad\fR=\fIstring\fR
+Use a specific AAD (Additional Authentificated Data) for
+file content authentification.
+.RE
 .SH ENVIRONMENT
 .TP
 .B TMPDIR
@@ -44,4 +103,4 @@ The directory in which to create the agent socket.
 .SH FILES
 .TP
 .B $XDG_CONFIG_HOME/gep/gep.key
-The file holding the secret key.
+The file holding the encryption key.

@@ -698,18 +698,16 @@ static void
 command_keygen(struct optparse *options)
 {
     static const struct optparse_name keygen[] = {
-        {"derive",      'd', OPTPARSE_OPTIONAL},
+        {"derive",      'd', OPTPARSE_NONE},
         {"edit",        'e', OPTPARSE_NONE},
         {"force",       'f', OPTPARSE_NONE},
-        {"fingerprint", 'i', OPTPARSE_NONE},
-        {"iterations",  'k', OPTPARSE_REQUIRED},
         {"plain",       'u', OPTPARSE_NONE},
         {0, 0, 0}
     };
-    int option, derive = 0, edit = 0, force = 0, fingerprint = 0;
+    int option, derive = 0, edit = 0, force = 0;
+
     int sec_iexp = GEP_SECKEY_ITERATIONS;
     int key_iexp = GEP_KEY_ITERATIONS;
-
     int exist;
     uint8_t key[32];
 
@@ -717,38 +715,12 @@ command_keygen(struct optparse *options)
         switch (option) {
         case 'd':
             derive = 1;
-            if (options->optarg) {
-                char *endptr;
-
-                errno = 0;
-                sec_iexp = strtol(options->optarg, &endptr, 10);
-                if (*endptr || errno)
-                    fatal("invalid argument -- %s", options->optarg);
-                if (sec_iexp < 5 || sec_iexp > 31)
-                    fatal("--derive argument must be 5 <= n <= 31 -- %s",
-                        options->optarg);
-            }
             break;
         case 'e':
             edit = 1;
             break;
         case 'f':
             force = 1;
-            break;
-        case 'i':
-            fingerprint = 1;
-            break;
-        case 'k': {
-            char *endptr;
-
-            errno = 0;
-            key_iexp = strtol(options->optarg, &endptr, 10);
-            if (*endptr || errno)
-                fatal("invalid argument -- %s", options->optarg);
-            if (key_iexp < 5 || key_iexp > 31)
-                fatal("--iterations argument must be 5 <= n <= 31 -- %s",
-                    options->optarg);
-            }
             break;
         case 'u':
             key_iexp = 0;
@@ -782,11 +754,6 @@ command_keygen(struct optparse *options)
     }
     else
         secure_entropy(key, 32);
-
-    if (fingerprint) {
-        fputs("keyid: ", stdout);
-        print_fingerprint(key);
-    }
 
     write_key(keyfile, key, key_iexp);
 }
@@ -855,7 +822,7 @@ command_encrypt(struct optparse *options)
         fclose(in);
     if (out != stdout)
         fclose(out);
-    if (!keep && infile)
+    if (!keep && infile && !outfile)
         remove(infile);
 }
 
@@ -929,7 +896,7 @@ command_decrypt(struct optparse *options)
         fclose(in);
     if (out != stdout)
         fclose(out);
-    if (!keep && infile)
+    if (!keep && infile && !outfile)
         remove(infile);
 }
 
@@ -1009,9 +976,8 @@ main(int argc, char **argv)
 
     switch (parse_command(command)) {
         case COMMAND_UNKNOWN:
-            break;
         case COMMAND_AMBIGUOUS:
-            fprintf(stderr, "gep: ambiguous command -- %s\n%s\n",
+            fprintf(stderr, "gep: unknown command -- %s\n%s\n",
                 command, docs_usage);
             exit(EXIT_FAILURE);
             break;
