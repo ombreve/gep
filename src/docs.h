@@ -4,9 +4,9 @@ static const char *docs_usage =
 "\n"
 "       commands:\n"
 "           keygen [-d|--derive] [-e|--edit] [-f|--force] [-u|--plain]\n"
-"           encrypt [-c|--stdout] [-k|--keep] [--aad=<string>]\n"
+"           encrypt [-c|--stdout] [-k|--keep] [--aad <string>]\n"
 "                   [<infile> [<outfile>]]\n"
-"           decrypt [-c|--stdout] [-k|--keep] [--aad=<string>]\n"
+"           decrypt [-c|--stdout] [-k|--keep] [--aad <string>]\n"
 "                   [<infile> [<outfile>]]\n"
 "           fingerprint";
 

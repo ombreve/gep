@@ -3,8 +3,7 @@
 This program encrypts files with AEAD_XChaCha20_Poly1305, a variant
 of rfc8439.
 It is mostly an adaptation of the excellent
-[`enchive`](http://nullprogram.com/enchive/) tool by Chris Wellons
-to a single key encryption algorithm.
+[`enchive`](http://nullprogram.com/enchive/) tool by Chris Wellons.
 
 See the included man page for option details.
 
@@ -23,18 +22,18 @@ You will be prompted for the passphrase to protect the key.
 
     $ gep keygen
 
-By default, this will create a file in `$XDG_CONFIG_HOME/gep`
-(or `$HOME/.config/gep`): `gep.key`.
+By default, this will create a file `gep.key` in `$XDG_CONFIG_HOME/gep`
+(or `$HOME/.config/gep`).
 
 To encrypt a file:
 
     $ gep encrypt private.txt
 
-It will ask for the protection password, encrypt `private.txt`
+It will ask for the protection passphrase, encrypt `private.txt`
 and replace it by `private.txt.gep`.
 
 For authentification, you can specify your own AAD (Additional
-Authentificated Data) with the `--aad` option:
+Authentificated Data) with the `--aad` option.
 
     $ gep encrypt --aad "Ripeness is all" private.txt
 
@@ -42,7 +41,7 @@ To decrypt a file:
 
     $ gep decrypt --aad "Ripeness is all" private.txt.gep
 
-It will ask for the protection password, decrypt and authenticate
+It will ask for the protection passphrase, decrypt and authenticate
 `private.txt.gep`, and replace it by `private.txt`.
 
 With no filenames, `encrypt` and `decrypt` operate on standard input
@@ -75,12 +74,12 @@ encryption key file.
 
 ## Key derivation algorithm
 
-The key derivation algorithm is reproduced from
-[`enchive`](http://nullprogram.com/enchive/).
+The scrypt-like key derivation algorithm is reproduced from
+[`enchive`](https://github.com/skeeto/enchive).
 
-Derivation is controlled by a single difficulty exponent *D*. Encryption
-key derivation requires 512MB of memory (D=29) by default. The salt for
-the secret key is all zeros.
+Derivation is controlled by a single difficulty exponent *D*. Encryption key
+derivation requires 512MB of memory (D=29). The salt for the secret key is all
+zeros.
 
 1. Allocate a `(1 << D) + 32` byte buffer, *M*.
 2. Compute `HMAC_SHA256(salt, passphrase)` and write this 32-byte
@@ -95,9 +94,9 @@ the secret key is all zeros.
 8. Repeat from step 5 `1 << (D - 5)` times.
 9. *P* points to the result.
 
-## Test of conformance to AEAD_XChaCha20_Poly1305
+## AEAD_XChaCha20_Poly1305 tests
 
-You can buil a test program to check the algorithms used by gep against
+You can build a test program to check the algorithms used by gep against
 some of the test vectors given in rfc8439 and xchacha20 specifications:
 
     $ make test
@@ -105,5 +104,4 @@ some of the test vectors given in rfc8439 and xchacha20 specifications:
 
 This will output test results of chacha20, poly1305 and xchacha20
 algorithms.
-
 
