@@ -805,6 +805,8 @@ command_encrypt(struct optparse *options)
     outfile = dupstr(optparse_arg(options));
     if (outfile && tostdout)
         fatal("option --stdout and output file are mutually exclusive");
+    if (outfile)
+        keep = 1;
     if (!outfile && infile && !tostdout)
         outfile = joinstr(2, infile, gep_suffix);
     if (outfile) {
@@ -873,6 +875,8 @@ command_decrypt(struct optparse *options)
     outfile = dupstr(optparse_arg(options));
     if (outfile && tostdout)
         fatal("option --stdout and output file are mutually exclusive");
+    if (outfile)
+        keep = 1;
     if (!outfile && infile && !tostdout) {
         size_t slen = sizeof(gep_suffix) - 1;
         size_t len = strlen(infile);
