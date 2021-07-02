@@ -822,7 +822,7 @@ command_encrypt(struct optparse *options)
         fclose(in);
     if (out != stdout)
         fclose(out);
-    if (!keep && infile && !outfile)
+    if (!keep && infile)
         remove(infile);
 }
 
@@ -896,7 +896,7 @@ command_decrypt(struct optparse *options)
         fclose(in);
     if (out != stdout)
         fclose(out);
-    if (!keep && infile && !outfile)
+    if (!keep && infile)
         remove(infile);
 }
 
