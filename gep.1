@@ -22,7 +22,7 @@ Default is 900 seconds (15 minutes).
 Do not start the key agent (default).
 .TP
 \fB\-k\ \fIfile\fR, \fB\-\-key\fR\ \fIfile\fR
-Set the secret key file.
+Set the encryption key file.
 .TP
 \fB\-\-help\fR
 Print a synopsis of the command line interface.
@@ -88,6 +88,10 @@ Do not delete the input file.
 Use a specific AAD (Additional Authentificated Data) for
 file content authentification.
 .RE
+.TP
+\fBfingerprint\fR
+Print a fingerprint of the encryption key on standard output.
+.RE
 .SH ENVIRONMENT
 .TP
 .B TMPDIR
@@ -95,7 +99,7 @@ If $XDG_RUNTIME_DIR is unset, the directory in which to create the agent socket.
 Default is /tmp.
 .TP
 .B XDG_CONFIG_HOME
-The directory under which the secret key will be created and read.
+The directory under which the encryption key will be created and read.
 Default is $HOME/.config.
 .TP
 .B XDG_RUNTIME_DIR
