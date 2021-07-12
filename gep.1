@@ -6,7 +6,7 @@ gep \- Good Enough Privacy tool
 .nh
 .HP 4
 .B gep
-[\fB-AV\fR] [\fB-a\fR[\fIseconds\fR]] [\fB-k\ \fIfile\fR] [\fB\-\-help\fR]
+[\fB-V\fR] [\fB-a\fR[\fIseconds\fR]] [\fB-k\ \fIfile\fR] [\fB\-\-help\fR]
 <command> [<args>]
 .SH DESCRIPTION
 .B gep
@@ -17,9 +17,6 @@ encrypts files with AEAD_XChaCha20_Poly1305, a variant of rfc8439.
 Run a key agent after successfully reading the passphrases.
 The agent will remain resident in memory until a period of inactivity passes.
 Default is 900 seconds (15 minutes).
-.TP
-\fB\-A\fB, \fB\-\-no\-agent\fR
-Do not start the key agent (default).
 .TP
 \fB\-k\ \fIfile\fR, \fB\-\-key\fR\ \fIfile\fR
 Set the encryption key file.

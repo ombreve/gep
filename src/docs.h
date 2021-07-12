@@ -1,5 +1,5 @@
 static const char *docs_usage =
-"usage: gep [-a|--agent[=<seconds>]] [-A|--no-agent] [-k|--key <file>]\n"
+"usage: gep [-a|--agent[=<seconds>]] [-k|--key <file>]\n"
 "           [-V|--version] [--help] <command> [<args>]\n"
 "\n"
 "       commands:\n"

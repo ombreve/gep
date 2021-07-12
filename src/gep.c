@@ -1265,7 +1265,6 @@ main(int argc, char **argv)
 {
     static const struct optparse_name global[] = {
         {"agent",       'a', OPTPARSE_OPTIONAL},
-        {"no-agent",    'A', OPTPARSE_NONE},
         {"key",         'k', OPTPARSE_REQUIRED},
         {"version",     'V', OPTPARSE_NONE},
         {"help",        256, OPTPARSE_NONE},
@@ -1289,9 +1288,6 @@ main(int argc, char **argv)
             }
             else
                 agent_timeout = GEP_AGENT_TIMEOUT;
-            break;
-        case 'A':
-            agent_timeout = 0;
             break;
         case 'k':
             keyfile = options->optarg;
