@@ -31,7 +31,7 @@ Print a synopsis of the command line interface.
 Print version information.
 .SH COMMANDS
 Any unique prefix for a command is accepted.
-For example, the command \fBe\fR would mean \fBencrypt\fR.
+For example, the command \fBen\fR would mean \fBencrypt\fR.
 .TP
 \fBkeygen\fR [\fB\-defu\fR]
 Generate a new encryption key either from system's entropy or a passphrase.
@@ -89,6 +89,21 @@ Use a specific AAD (Additional Authentificated Data) for
 file content authentification.
 .RE
 .TP
+\fBedit\fR [\fB--no-backup\fR] [\fB--aad\fR\ \fIstring\fR] \fIinfile\fR
+Edit securely an encrypted file. It is an error for the input file to lack
+the \fB.gep\fR suffix.
+.RS 4
+.TP
+\fB\-\-no\-backup\fR
+Do not backup input file before editing. By default, the input file,
+if it exists, is saved to a file with the same name and the
+\fB.old\fR suffix added.
+.TP
+\fB\-\-aad\fR\ \fIstring\fR
+Use a specific AAD (Additional Authentificated Data) for
+file content authentification.
+.RE
+.TP
 \fBfingerprint\fR
 Print a fingerprint of the encryption key on standard output.
 .RE
@@ -104,6 +119,9 @@ Default is $HOME/.config.
 .TP
 .B XDG_RUNTIME_DIR
 The directory in which to create the agent socket.
+.TP
+.B EDITOR
+The editor program used to edit encrypted files. Default is \fBvi\fR.
 .SH FILES
 .TP
 .B $XDG_CONFIG_HOME/gep/gep.key

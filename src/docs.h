@@ -8,6 +8,7 @@ static const char *docs_usage =
 "                   [<infile> [<outfile>]]\n"
 "           decrypt [-c|--stdout] [-k|--keep] [--aad <string>]\n"
 "                   [<infile> [<outfile>]]\n"
+"           edit [--no-backup] [-aad <string>] <infile>\n"
 "           fingerprint";
 
 static const char *docs_summary =

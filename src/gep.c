@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -11,6 +12,8 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include "../config.h"
 #include "docs.h"
@@ -27,27 +30,12 @@ static char *keyfile = 0;
 static const char gep_suffix[] = STR(GEP_FILE_EXTENSION);
 static const char gep_aad[] = GEP_ADDITIONAL_AUTHENTIFICATED_DATA;
 
-static char *fatal_oname = 0;
-static FILE *fatal_ofd = 0;
-
-/* Print a message and exit the program with a failure code. */
-static void
-fatal(const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    fprintf(stderr, "gep: ");
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
-    va_end(ap);
-
-    if (fatal_ofd)
-        fclose(fatal_ofd);
-    if (fatal_oname)
-        remove(fatal_oname);
-    exit(EXIT_FAILURE);
-}
+/* Some global variables to cleanup on fatal exit or kill. */
+static char *cleanup_outfile_name = 0;
+static FILE *cleanup_outfile_fd = 0;
+static char *cleanup_tmpfile_name = 0;
+static char *cleanup_tmpdir_name = 0;
+static char *cleanup_dev_name = 0;
 
 /* Print a non-fatal warning message. */
 static void
@@ -59,6 +47,116 @@ warning(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
+}
+
+/* Run a child process and wait for its exit.
+ * Return the exit code of the child or -1 in case of error.
+ * Stdin, stdout and stderr are set to tty in the child process. */
+static int
+runwait(char *argv[])
+{
+    pid_t pid;
+    int status, w, tty;
+    void (*istat)(int), (*qstat)(int);
+
+    fflush(stdout);
+    tty = open("/dev/tty", O_RDWR);
+    if (tty == -1) {
+        warning("could not open /dev/tty -- %s", strerror(errno));
+        return -1;
+    }
+
+    if ((pid = fork()) == -1) {
+        warning("could not fork() process -- %s", strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        signal(SIGINT, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+        close(0); dup(tty);
+        close(1); dup(tty);
+        close(2); dup(tty);
+        close(tty);
+        execvp(argv[0], argv);
+        warning("could not execvp() process -- %s", strerror(errno));
+        return -1;
+    }
+
+    istat = signal(SIGINT, SIG_IGN);
+    qstat = signal(SIGQUIT, SIG_IGN);
+    close(tty);
+    while ((w = wait(&status)) != pid && w != -1);
+    if (w == -1) {
+        warning("could not wait() for child process -- %s", strerror(errno));
+        return -1;
+    }
+    signal(SIGINT, istat);
+    signal(SIGQUIT, qstat);
+    return status;
+}
+
+static void
+cleanup(void)
+{
+    if (cleanup_outfile_fd) {
+        fclose(cleanup_outfile_fd);
+        cleanup_outfile_fd = 0;
+    }
+    if (cleanup_outfile_name) {
+        remove(cleanup_outfile_name);
+        free(cleanup_outfile_name);
+        cleanup_outfile_name = 0;
+    }
+    if (cleanup_tmpfile_name) {
+        remove(cleanup_tmpfile_name);
+        free(cleanup_tmpfile_name);
+        cleanup_tmpfile_name = 0;
+    }
+    if (cleanup_tmpdir_name) {
+        char *cmd[] = {"umount", cleanup_tmpdir_name, 0};
+
+        if (runwait(cmd))
+            warning("failed to umount temporary directory");
+    }
+    if (cleanup_dev_name) {
+        char *cmd[] = {"diskutil", "quiet", "eject", cleanup_dev_name, 0};
+
+        if (runwait(cmd))
+            warning("failed to eject ramdisk");
+        free(cleanup_dev_name);
+        cleanup_dev_name = 0;
+    }
+    if (cleanup_tmpdir_name) {
+        rmdir(cleanup_tmpdir_name);
+        free(cleanup_tmpdir_name);
+        cleanup_tmpdir_name = 0;
+    }
+}
+
+/* Trap function: cleanup and exit. */
+static void
+signal_trap(int sig)
+{
+    cleanup();
+    exit(EXIT_FAILURE);
+}
+
+/* Print a message, cleanup and exit the program with a failure code.
+ * Do not call it from a child process. */
+static void
+fatal(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    fprintf(stderr, "gep: ");
+    vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+    va_end(ap);
+
+    cleanup();
+    exit(EXIT_FAILURE);
 }
 
 /* Return a copy of string S, which may be NULL. */
@@ -113,7 +211,7 @@ joinstr(int n, ...)
 static void
 secure_entropy(void *buf, size_t len)
 {
-    FILE *r = fopen("/dev/urandom", "rb");
+    FILE *r = fopen("/dev/urandom", "r");
 
     if (!r)
         fatal("failed to open /dev/urandom");
@@ -138,6 +236,149 @@ dir_exists(const char *path)
     struct stat info;
 
     return !stat(path, &info) && S_ISDIR(info.st_mode);
+}
+
+/* Backup stream FD in file FILENAME.old. */
+static void
+backup_file(FILE *fd, const char *filename)
+{
+    FILE *backup;
+    char *name;
+    uint8_t buffer[RFC8439_BLOCK_SIZE * 1024];
+
+    name = joinstr(2, filename, ".old");
+    backup = fopen(name, "w");
+    if (!backup)
+        fatal("failed to open backup file '%s' -- %s",
+              name, strerror(errno));
+
+    for (;;) {
+        size_t z = fread(buffer, 1, sizeof(buffer), fd);
+
+        if (!z) {
+            if (ferror(fd))
+                fatal("error reading file '%s'", filename);
+            break;
+        }
+        if (!fwrite(buffer, z, 1, backup))
+            fatal("error writing backup file '%s'", name);
+        if (z < sizeof(buffer[0]))
+            break;
+    }
+
+    fclose(backup);
+    free(name);
+}
+
+/* Create a process dependent directory mounted on a ramdisk. */
+static char *
+tmp_directory(void)
+{
+    char *tmp, *dir;
+    pid_t pid;
+    int status, w, outpipe[2], n;
+    char ramdev[1024];
+
+    if (pipe(outpipe) == -1)
+        fatal("could not create pipe -- %s", strerror(errno));
+    pid = fork();
+    if (pid == -1)
+        fatal("could not fork() hdiutil -- %s", strerror(errno));
+    if (pid == 0) {
+        /* 32768 sectors of 512 bytes = 16mo */
+        char *cmd[] = { "hdid", "-drivekey", "system-image=yes",
+                        "-nomount", "ram://32768", 0 };
+
+        signal(SIGINT, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+        close(1);
+        dup(outpipe[1]);
+        close(outpipe[0]);
+        close(outpipe[1]);
+        execvp(cmd[0], cmd);
+        warning("could not execvp() hdid -- %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    close(outpipe[1]);
+    n = read(outpipe[0], ramdev, sizeof(ramdev));
+    close(outpipe[0]);
+    if (n == -1)
+        fatal("could not read pipe -- %s", strerror(errno));
+    else {
+        int i;
+
+        for (i = 0; i < n; i++)
+            if (isspace(ramdev[i])) {
+                ramdev[i] = 0;
+                break;
+            }
+        if (i == n)
+            fatal("read bad device name on pipe");
+    }
+    while ((w = wait(&status)) != pid && w != -1);
+    if (w == -1)
+        fatal("could not wait() for hdid -- %s", strerror(errno));
+    if (status)
+        fatal("could not create ramdisk");
+    cleanup_dev_name = dupstr(ramdev);
+
+    {
+        char *cmd[] = { "newfs_hfs", "-M", "700", cleanup_dev_name, 0 };
+        if (runwait(cmd))
+            fatal("could not create file system on ramdisk '%s'", ramdev);
+    }
+
+    tmp = getenv("XDG_RUNTIME_DIR");
+    if (!tmp) {
+        tmp = getenv("TMPDIR");
+        if (!tmp)
+            tmp = "/tmp";
+    }
+    dir = joinstr(2, tmp, "gepXXXXXX");
+    if (!mkdtemp(dir))
+        fatal("could not generate temporary directory name");
+    cleanup_tmpdir_name = dir;
+
+    {
+        char *cmd[] = { "mount", "-t", "hfs",
+                        "-o", "noatime", "-o", "nobrowse",
+                        cleanup_dev_name, cleanup_tmpdir_name, 0 };
+        if (runwait(cmd))
+            fatal("could not mount ramdisk on temporary directory");
+    }
+
+    return dir;
+}
+
+/* Generate a process dependent file name. */
+static char *
+tmp_file(void)
+{
+    char *dir, *path;
+
+    dir = tmp_directory();
+    path = joinstr(2, dir, "/XXXXXX");
+    if (!mktemp(path))
+        fatal("could not generate temporary file name");
+    cleanup_tmpfile_name = path;
+    return path;
+}
+
+/* Edit FILE using EDITOR program or vi.
+ * Return the exit status of the editor. */
+static int
+edit_file(char *file)
+{
+    char *editor, *edit[3];
+
+    editor = getenv("EDITOR");
+    if (!editor)
+        editor = "vi";
+
+    edit[0] = editor;
+    edit[1] = file;
+    edit[2] = 0;
+    return runwait(edit);
 }
 
 /* Prepend $XDG_CONFIG_HOME/gep or $HOME/.config/gep to FILE.
@@ -299,16 +540,20 @@ agent_run(const uint8_t *key, const uint8_t *iv)
         warning("could not fork() agent -- %s", strerror(errno));
         return 0;
     }
-    else if (pid != 0) {
+    if (pid != 0)
         return 1;
-    }
+
+    signal(SIGINT, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
     close(0);
     close(1);
     umask(~(S_IRUSR | S_IWUSR));
 
-    if (unlink(addr.sun_path) && errno != ENOENT)
-        fatal("failed to remove existing socket -- %s", strerror(errno));
-
+    if (unlink(addr.sun_path) && errno != ENOENT) {
+        warning("agent failed to remove existing socket -- %s",
+                strerror(errno));
+        exit(EXIT_FAILURE);
+    }
     if (bind(pfd.fd, (struct sockaddr *)&addr, sizeof(addr))) {
         if (errno != EADDRINUSE)
             warning("could not bind agent socket %s -- %s",
@@ -327,9 +572,11 @@ agent_run(const uint8_t *key, const uint8_t *iv)
     for (;;) {
        int cfd;
        int r = poll(&pfd, 1, agent_timeout * 1000);
+
        if (r < 0) {
            unlink(addr.sun_path);
-           fatal("agent poll failed -- %s", strerror(errno));
+           warning("agent poll failed -- %s", strerror(errno));
+           exit(EXIT_FAILURE);
        }
        if (r == 0) {
            unlink(addr.sun_path);
@@ -482,8 +729,8 @@ load_key(const char *keyfile, uint8_t *key)
                 fatal("wrong passphrase");
         }
 
-        if (!agent_success && agent_timeout)
-            agent_run(protect, buf_iv);
+        if (!agent_success && agent_timeout && !agent_run(protect, buf_iv))
+            warning("could not run agent");
 
         chacha20_init(cha, protect, buf_iv);
         chacha20_encrypt(cha, buf_seckey, key, 32);
@@ -600,12 +847,8 @@ decrypt_stream(FILE *in, FILE *out,
     uint8_t buffer[2][RFC8439_BLOCK_SIZE * 1024 + RFC8439_MAC_SIZE];
     uint8_t subkey[32], nonce[24], subnonce[12];
 
-    if (!(fread(nonce, sizeof(nonce), 1, in))) {
-        if (ferror(in))
-            fatal("cannot read ciphertext nonce");
-        else
-            fatal("ciphertext file too short for a nonce");
-    }
+    if (!fread(nonce, sizeof(nonce), 1, in))
+        fatal("cannot read ciphertext nonce");
     xchacha20_key(key, nonce, subkey, subnonce);
     rfc8439_init(ctx, subkey, subnonce, aad, aad_len);
 
@@ -667,11 +910,12 @@ enum command {
     COMMAND_KEYGEN,
     COMMAND_ENCRYPT,
     COMMAND_DECRYPT,
+    COMMAND_EDIT,
     COMMAND_FINGERPRINT
 };
 
 static const char command_names[][12] = {
-    "keygen", "encrypt", "decrypt", "fingerprint"
+    "keygen", "encrypt", "decrypt", "edit", "fingerprint"
 };
 
 /* Parse the user's command into an enum. */
@@ -803,10 +1047,11 @@ command_encrypt(struct optparse *options)
     }
 
     outfile = dupstr(optparse_arg(options));
-    if (outfile && tostdout)
-        fatal("option --stdout and output file are mutually exclusive");
-    if (outfile)
+    if (outfile) {
+        if (tostdout)
+            fatal("option --stdout and output file are mutually exclusive");
         keep = 1;
+    }
     if (!outfile && infile && !tostdout)
         outfile = joinstr(2, infile, gep_suffix);
     if (outfile) {
@@ -814,16 +1059,20 @@ command_encrypt(struct optparse *options)
         if (!out)
             fatal("could not open output file '%s' -- %s",
                   outfile, strerror(errno));
-        fatal_ofd = out;
-        fatal_oname = outfile;
+        cleanup_outfile_fd = out;
+        cleanup_outfile_name = outfile;
     }
 
     encrypt_stream(in, out, key, (uint8_t *)aad, strlen(aad));
 
     if (in != stdin)
         fclose(in);
-    if (out != stdout)
+    if (out != stdout) {
         fclose(out);
+        cleanup_outfile_fd = 0;
+        free(cleanup_outfile_name);
+        cleanup_outfile_name = 0;
+    }
     if (!keep && infile)
         remove(infile);
 }
@@ -866,22 +1115,23 @@ command_decrypt(struct optparse *options)
 
     infile = optparse_arg(options);
     if (infile) {
-        in = fopen(infile, "rb");
+        in = fopen(infile, "r");
         if (!in)
             fatal("could not open input file '%s' -- %s",
                   infile, strerror(errno));
     }
 
     outfile = dupstr(optparse_arg(options));
-    if (outfile && tostdout)
-        fatal("option --stdout and output file are mutually exclusive");
-    if (outfile)
+    if (outfile) {
+        if (tostdout)
+            fatal("option --stdout and output file are mutually exclusive");
         keep = 1;
+    }
     if (!outfile && infile && !tostdout) {
         size_t slen = sizeof(gep_suffix) - 1;
         size_t len = strlen(infile);
         if (len <= slen || strcmp(gep_suffix, infile + len - slen) != 0)
-            fatal("could not determine output filename from %s", infile);
+            fatal("could not determine output filename from '%s'", infile);
         outfile = dupstr(infile);
         outfile[len - slen] = 0;
     }
@@ -890,18 +1140,103 @@ command_decrypt(struct optparse *options)
         if (!out)
             fatal("could not open output file '%s' -- %s",
                   outfile, strerror(errno));
-        fatal_ofd = out;
-        fatal_oname = outfile;
+        cleanup_outfile_fd = out;
+        cleanup_outfile_name = outfile;
     }
 
     decrypt_stream(in, out, key, (uint8_t *)aad, strlen(aad));
 
     if (in != stdin)
         fclose(in);
-    if (out != stdout)
+    if (out != stdout) {
         fclose(out);
+        cleanup_outfile_fd = 0;
+        free(cleanup_outfile_name);
+        cleanup_outfile_name = 0;
+    }
     if (!keep && infile)
         remove(infile);
+}
+
+static void
+command_edit(struct optparse *options)
+{
+    static const struct optparse_name decrypt[] = {
+        {"aad",       256, OPTPARSE_REQUIRED},
+        {"no-backup", 257, OPTPARSE_NONE},
+        {0, 0, 0}
+    };
+    int option, backup = 1;
+    const char *aad = gep_aad;
+    char *infile, *outfile;
+    FILE *in, *out;
+
+    uint8_t key[32];
+
+    while ((option = optparse(options, decrypt)) != OPTPARSE_NONE) {
+        switch (option) {
+        case 256:
+            aad = options->optarg;
+            break;
+        case 257:
+            backup = 0;
+            break;
+        case OPTPARSE_ERROR:
+        default:
+            fatal("%s", options->errmsg);
+        }
+    }
+
+    infile = optparse_arg(options);
+    if (infile) {
+        size_t slen = sizeof(gep_suffix) - 1;
+        size_t len = strlen(infile);
+        if (len <= slen || strcmp(gep_suffix, infile + len - slen) != 0)
+            fatal("input file '%s' has bad suffix", infile);
+    }
+    else
+        fatal("no input file to edit");
+
+    load_key(keyfile, key);
+    outfile = tmp_file();
+
+    if (file_exists(infile)) {
+        in = fopen(infile, "r");
+        if (!in)
+            fatal("could not open input file '%s' -- %s",
+                infile, strerror(errno));
+        if (backup) {
+            backup_file(in, infile);
+            if (fseek(in, 0L, SEEK_SET) == -1)
+                fatal("could not rewind input file '%s' -- %s",
+                    infile, strerror(errno));
+        }
+        out = fopen(outfile, "w");
+        if (!out)
+            fatal("could not open temporary file for writing -- %s",
+                strerror(errno));
+        decrypt_stream(in, out, key, (uint8_t *)aad, strlen(aad));
+        fclose(in);
+        fclose(out);
+    }
+
+    if (edit_file(outfile))
+        fatal("could not edit temporary file");
+    if (file_exists(outfile)) {
+        in = fopen(infile, "w");
+        if (!in)
+            fatal("could not open input file '%s' for writing -- %s",
+                infile, strerror(errno));
+        out = fopen(outfile, "r");
+        if (!out)
+            fatal("could not open temporary file -- %s", strerror(errno));
+        encrypt_stream(out, in, key, (uint8_t *)aad, strlen(aad));
+        fclose(in);
+        fclose(out);
+        cleanup();
+    }
+    else
+        warning("edited file was not saved");
 }
 
 static void
@@ -973,14 +1308,20 @@ main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
     }
+
+    signal(SIGINT, signal_trap);
+    signal(SIGQUIT, signal_trap);
     if (!keyfile)
         keyfile = default_keyfile();
 
     command = optparse_arg(options);
-
     switch (parse_command(command)) {
-        case COMMAND_UNKNOWN:
         case COMMAND_AMBIGUOUS:
+            fprintf(stderr, "gep: ambiguous command -- %s\n%s\n",
+                command, docs_usage);
+            exit(EXIT_FAILURE);
+            break;
+        case COMMAND_UNKNOWN:
             fprintf(stderr, "gep: unknown command -- %s\n%s\n",
                 command, docs_usage);
             exit(EXIT_FAILURE);
@@ -994,10 +1335,13 @@ main(int argc, char **argv)
         case COMMAND_DECRYPT:
             command_decrypt(options);
             break;
+        case COMMAND_EDIT:
+            command_edit(options);
+            break;
         case COMMAND_FINGERPRINT:
             command_fingerprint(options);
             break;
     }
 
-    return 0;
+    exit(0);
 }
