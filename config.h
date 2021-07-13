@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 #ifndef GEP_VERSION
-#define GEP_VERSION 1.0
+#define GEP_VERSION 1.1
 #endif
 
 #ifndef GEP_FILE_EXTENSION
