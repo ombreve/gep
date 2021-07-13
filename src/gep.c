@@ -1188,13 +1188,7 @@ command_edit(struct optparse *options)
     }
 
     infile = optparse_arg(options);
-    if (infile) {
-        size_t slen = sizeof(gep_suffix) - 1;
-        size_t len = strlen(infile);
-        if (len <= slen || strcmp(gep_suffix, infile + len - slen) != 0)
-            fatal("input file '%s' has bad suffix", infile);
-    }
-    else
+    if (!infile)
         fatal("no input file to edit");
 
     load_key(keyfile, key);
